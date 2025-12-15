@@ -1,10 +1,11 @@
-# Version V1.0
+# Version V1.1
 # Confluence Storage & Attachments Analysis
 # - Robust link check across versions (handles special chars, HTML-escaped and URL-encoded names)
 # - Tries to fetch version info for attachments; falls back gracefully
 # - Reliable client-side sorter for HTML tables (no external libs)
 # - Keeps TOP-100, Unreferenced lists, Download/Attachment/API Delete links
-
+# - English labels and messages
+# - Optional config file for Confluence credentials
 
 import os
 import csv
@@ -13,31 +14,55 @@ from datetime import datetime
 from html import escape, unescape
 from urllib.parse import quote
 from pathlib import Path
+import configparser
+import sys
 
-# ---------------------- CONFIG -------------------------
-BASE_URL = "https://YOUR_DOMAIN.atlassian.net/wiki"
-API_USER = "YOUR_EMAIL"
-API_TOKEN = "YOUR_API_TOKEN"
+# ---------------------- VERSION -----------------------
+VERSION = "V1_1"
 
-# Output folder with underscore version
+# ---------------------- CONFIG ------------------------
+BASE_URL = ""
+API_USER = ""
+API_TOKEN = ""
+
+# Try to read config file if values are empty
+config_path = Path(__file__).parent / "confluence_storage_analyzer.cfg"
+if config_path.exists():
+    config = configparser.ConfigParser()
+    config.read(config_path)
+    if not BASE_URL:
+        BASE_URL = config.get("confluence", "base_url", fallback="")
+    if not API_USER:
+        API_USER = config.get("confluence", "api_user", fallback="")
+    if not API_TOKEN:
+        API_TOKEN = config.get("confluence", "api_token", fallback="")
+
+# Validate config
+if not BASE_URL or not API_USER or not API_TOKEN:
+    print("ERROR: BASE_URL, API_USER, and API_TOKEN must be set either in the script or in confluence_storage_analyzer.cfg")
+    sys.exit(1)
+
+# Output folder with version in name
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-OUTPUT_ROOT = Path(f"confluence_analysis_V1_0_{timestamp}")
+OUTPUT_ROOT = Path(f"confluence_analysis_{VERSION}_{timestamp}")
 OUTPUT_ROOT.mkdir(exist_ok=True)
 
 # ---------------------- HELPERS ------------------------
 def api_get(url, params=None):
+    """Simple GET with auth, raises on failure"""
     r = requests.get(url, auth=(API_USER, API_TOKEN), params=params, timeout=30)
     r.raise_for_status()
     return r.json()
 
 def safe_api_get(url, params=None):
-    """Like api_get but returns None on failure (to be resilient)."""
+    """Like api_get but returns None on failure (resilient)."""
     try:
         return api_get(url, params=params)
     except Exception:
         return None
 
 def get_spaces():
+    """Fetch all spaces in Confluence instance."""
     spaces = []
     start = 0
     while True:
@@ -45,6 +70,7 @@ def get_spaces():
         if not data:
             break
         spaces.extend(data.get("results", []))
+        # check for next page
         if "_links" in data and "next" in data["_links"]:
             start += 50
         else:
@@ -52,6 +78,7 @@ def get_spaces():
     return spaces
 
 def get_all_pages(space_key):
+    """Fetch all pages in a space, paginated."""
     pages = []
     start = 0
     while True:
@@ -99,12 +126,10 @@ def get_attachment_versions(page_id, attachment_id):
     # 1) try page-scoped endpoint
     data = safe_api_get(f"{BASE_URL}/rest/api/content/{page_id}/child/attachment/{attachment_id}", params={"expand":"version"})
     if data and "results" in data and len(data["results"]) > 0:
-        # sometimes the single result is the attachment itself
         res = data["results"][0]
-        # if version is present, try to build versions list
         ver = res.get("version")
         if ver:
-            # We don't always have historical versions from that call; return current metadata as a fallback
+            # sometimes the single result is the attachment itself
             return [res]
         else:
             return [res]
@@ -156,40 +181,32 @@ def is_attachment_linked_on_page_versions(page_id, versions):
     if not data:
         return False
     html_content = data.get("body", {}).get("storage", {}).get("value", "") or ""
-    # lower for text comparisons where appropriate
     html_low = html_content.lower()
 
     for v in versions:
-        # each 'version' may be either the att metadata or include filename/title
         title = v.get("title") if isinstance(v, dict) else str(v)
         if not title:
             continue
         variants = normalize_title_variants(title)
         for var in variants:
-            if var in html_content:
+            if var in html_content or var.lower() in html_low:
                 return True
-            if var.lower() in html_low:
-                return True
-        # also look for attachment download link that contains the filename (possibly URL encoded)
         try:
             encoded = quote(title, safe='')
             if encoded in html_content or encoded in html_low:
                 return True
         except Exception:
             pass
-        # check common substring: filename without extension might appear
         base = title.rsplit('/', 1)[-1]
-        if base and base in html_content:
-            return True
-        if base.lower() in html_low:
+        if base and (base in html_content or base.lower() in html_low):
             return True
     return False
 
-# ---------------------- ANALYSE SPACE -----------------
+# ---------------------- ANALYZE SPACE -----------------
 def analyze_space(space, all_attachments_global):
     space_key = space.get("key")
     space_name = space.get("name", space_key)
-    print(f"Analysiere Space: {space_key} - {space_name}")
+    print(f"Analyzing Space: {space_key} - {space_name}")
 
     space_folder = OUTPUT_ROOT / space_key
     space_folder.mkdir(exist_ok=True)
@@ -207,7 +224,7 @@ def analyze_space(space, all_attachments_global):
             size = att.get("extensions", {}).get("fileSize", 0)
             download_url = BASE_URL + att.get("_links", {}).get("download", "")
             delete_url_free = f"{BASE_URL}/pages/viewpageattachments.action?pageId={page_id}"
-            delete_url_api = f"{BASE_URL}/rest/api/content/{att_id}"  # DELETE method endpoint
+            delete_url_api = f"{BASE_URL}/rest/api/content/{att_id}"
 
             # try to get full versions list
             versions = get_attachment_versions(page_id, att_id)
@@ -226,7 +243,7 @@ def analyze_space(space, all_attachments_global):
                 "delete_url_free": delete_url_free,
                 "delete_url_api": delete_url_api,
                 "original_page": {"id": page_id, "title": page_title, "url": page_url},
-                "linked_pages": [],          # pages where it appears as attachment (non-physical refs will also be gathered)
+                "linked_pages": [],
                 "is_linked_on_page": is_linked_on_page,
                 "versions": versions
             }
@@ -234,9 +251,7 @@ def analyze_space(space, all_attachments_global):
             if att_id not in all_attachments_global:
                 all_attachments_global[att_id] = att_info
             else:
-                # record that the same attachment id appears as attachment for another page (copied etc.)
                 all_attachments_global[att_id]["linked_pages"].append({"id": page_id, "title": page_title, "url": page_url})
-                # extend versions if any new
                 try:
                     all_attachments_global[att_id]["versions"].extend(v for v in versions if v not in all_attachments_global[att_id]["versions"])
                 except Exception:
@@ -250,7 +265,6 @@ def analyze_space(space, all_attachments_global):
     # unreferenced: none of the versions are linked anywhere (owning page nor other pages)
     unreferenced_files = []
     for a in space_files:
-        # check linked elsewhere (pages where this attachment object was also found)
         linked_elsewhere = [p for p in a.get("linked_pages", []) if p.get("id") != a.get("original_page", {}).get("id")]
         any_linked = a.get("is_linked_on_page", False) or len(linked_elsewhere) > 0
         if not any_linked:
@@ -263,7 +277,7 @@ def analyze_space(space, all_attachments_global):
 
     csv_unref = space_folder / f"{space_key}_unreferenced.csv"
     html_unref = space_folder / f"{space_key}_unreferenced.html"
-    write_csv_html(unreferenced_files, csv_unref, html_unref, space_name + " (Unreferenziert)")
+    write_csv_html(unreferenced_files, csv_unref, html_unref, space_name + " (Unreferenced)")
 
     return {
         "space_key": space_key,
@@ -281,9 +295,9 @@ def write_csv_html(attachments, csv_path, html_path, space_name):
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         header = [
-            "Dateiname", "Größe(Bytes)", "Größe(MB)", "Download URL",
-            "Originalseite", "Verlinkt auf Seite", "Verlinkt auf anderen Seiten",
-            "Attachment-Seite Link", "API Delete Link"
+            "Filename", "Size(Bytes)", "Size(MB)", "Download URL",
+            "Original Page", "Linked on Page", "Linked on Other Pages",
+            "Attachment Page Link", "API Delete Link"
         ]
         w.writerow(header)
         for att in attachments:
@@ -295,14 +309,14 @@ def write_csv_html(attachments, csv_path, html_path, space_name):
                 f"{att.get('size', 0)/(1024*1024):.2f}",
                 att.get("download_url"),
                 f"{att.get('original_page', {}).get('title')} ({att.get('original_page', {}).get('url')})",
-                "Ja" if att.get("is_linked_on_page") else "Nein",
+                "Yes" if att.get("is_linked_on_page") else "No",
                 linked_other_str,
                 att.get("delete_url_free"),
                 att.get("delete_url_api")
             ]
             w.writerow(row)
 
-    # HTML (with robust inline sorter)
+    # HTML
     rows = ""
     for att in attachments[:100]:
         linked_other = [p for p in att.get("linked_pages", []) if p.get("id") != att.get("original_page", {}).get("id")]
@@ -313,9 +327,9 @@ def write_csv_html(attachments, csv_path, html_path, space_name):
             <td data-sort="{att.get('size', 0)}" style="text-align:right">{att.get('size',0)/1024/1024:.2f} MB</td>
             <td><a href="{att.get('download_url')}" target="_blank">Download</a></td>
             <td><a href="{att.get('original_page', {}).get('url')}" target="_blank">{escape(att.get('original_page', {}).get('title') or '')}</a></td>
-            <td>{'Ja' if att.get('is_linked_on_page') else 'Nein'}</td>
+            <td>{'Yes' if att.get('is_linked_on_page') else 'No'}</td>
             <td>{linked_other_html}</td>
-            <td><a href="{att.get('delete_url_free')}" target="_blank">Attachment-Seite</a></td>
+            <td><a href="{att.get('delete_url_free')}" target="_blank">Attachment Page</a></td>
             <td><a href="{att.get('delete_url_api')}" target="_blank">API Delete</a></td>
         </tr>
         """
@@ -349,12 +363,9 @@ document.addEventListener('DOMContentLoaded', function () {{
         return function(a, b) {{
             const v1 = getCellValue(asc ? a : b, idx);
             const v2 = getCellValue(asc ? b : a, idx);
-
-            // try numeric
             const n1 = parseFloat(String(v1).replace(',', '.'));
             const n2 = parseFloat(String(v2).replace(',', '.'));
             if (!isNaN(n1) && !isNaN(n2)) return n1 - n2;
-
             return String(v1).localeCompare(String(v2), undefined, {{numeric: true, sensitivity: 'base'}});
         }};
     }}
@@ -379,11 +390,11 @@ document.addEventListener('DOMContentLoaded', function () {{
 </head>
 <body>
 <h1>Space: {escape(space_name)}</h1>
-<p><b>Gesamtdateien:</b> {len(attachments)} | <b>Top 100 Dateien angezeigt</b></p>
+<p><b>Total Files:</b> {len(attachments)} | <b>Top 100 files displayed</b></p>
 <table class="sortable">
 <thead>
 <tr>
-  <th>Dateiname</th><th>Größe</th><th>Download</th><th>Originalseite</th><th>Verlinkt auf Seite</th><th>Verlinkt auf anderen Seiten</th><th>Attachment-Seite</th><th>API Delete Link</th>
+  <th>Filename</th><th>Size</th><th>Download</th><th>Original Page</th><th>Linked on Page</th><th>Linked on Other Pages</th><th>Attachment Page</th><th>API Delete Link</th>
 </tr>
 </thead>
 <tbody>
@@ -416,7 +427,7 @@ def generate_root_html(space_results):
 <html>
 <head>
 <meta charset="utf-8">
-<title>Confluence Analyse Übersicht</title>
+<title>Confluence Storage Analysis Overview</title>
 <style>
 body {{ font-family: Arial, sans-serif; padding: 18px; }}
 table {{ border-collapse: collapse; width: 90%; }}
@@ -462,10 +473,10 @@ document.addEventListener('DOMContentLoaded', function () {{
 </script>
 </head>
 <body>
-<h1>Confluence Speicheranalyse vom {timestamp}</h1>
+<h1>Confluence Storage Analysis from {timestamp}</h1>
 <table class="sortable">
 <thead>
-<tr><th>Space</th><th>Gesamtgröße (MB)</th><th>Dateien</th><th>Report</th><th>Unreferenced Report</th></tr>
+<tr><th>Space</th><th>Total Size (MB)</th><th>Files</th><th>Report</th><th>Unreferenced Report</th></tr>
 </thead>
 <tbody>
 {rows}
@@ -490,7 +501,7 @@ def main():
         results.append(res)
 
     generate_root_html(results)
-    print("\nFERTIG! Analyseordner erstellt:")
+    print("\nDONE! Analysis folder created:")
     print(os.path.abspath(OUTPUT_ROOT))
 
 if __name__ == "__main__":

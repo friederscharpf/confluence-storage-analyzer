@@ -1,0 +1,5 @@
+[confluence]
+base_url = https://your-domain.atlassian.net/wiki
+api_user = your.email@example.com
+api_token = your_api_token_here
+

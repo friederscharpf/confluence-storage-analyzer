@@ -1,12 +1,12 @@
 # Confluence Cloud Storage Analyzer
 
-**Version:** V1.0
+**Version:** V1.1
 **Author:** Frieder Scharpf
 **Description:** A Python tool for analyzing storage used by attachments in Confluence Cloud Free, Standard and Premium.
 
 ## Overview
 
-The **Confluence Cloud Storage Analyzer** is a Python based utility that uses the Confluence REST API to perform a complete audit of storage used by attachments within a Confluence Cloud instance. It analyzes spaces, pages, and attachments to help users understand where storage is consumed and which files can safely be removed. This is the first working version that has german output in csv and html files.
+The **Confluence Cloud Storage Analyzer** is a Python based utility that uses the Confluence REST API to perform a complete audit of storage used by attachments within a Confluence Cloud instance. It analyzes spaces, pages, and attachments to help users understand where storage is consumed and which files can safely be removed.
 
 It provides:
 
@@ -41,10 +41,22 @@ All output is stored in a timestamped folder.
 
 ## Configuration
 
-Edit the following variables in the script:
-BASE_URL [https://YOUR_DOMAIN.atlassian.net/wiki](https://YOUR_DOMAIN.atlassian.net/wiki)
-API_USER "YOUR_EMAIL"
-API_TOKEN "YOUR_API_TOKEN"
+There are two options to configure the credentials for Confluence. The first one is to add the credentials directly to the script and the second one is to use a configuration file.
+ 
+To add the credentials to the script, edit the following variables: BASE_URL, API_USER, API_TOKEN
+Example:
+BASE_URL = "[https://YOUR_DOMAIN.atlassian.net/wiki](https://YOUR_DOMAIN.atlassian.net/wiki)"
+API_USER = "YOUR_EMAIL"
+API_TOKEN = "YOUR_API_TOKEN"
+
+To use the configuration file, create a file with the name + file extention: **confluence_storage_analyzer.cfg** and the following content:
+[confluence]
+base_url = https://your-domain.atlassian.net/wiki
+api_user = your.email@example.com
+api_token = your_api_token_here
+
+If the configuration file exists, its values are used only if the corresponding variables in the script are empty.
+You can also remove the suffix from the template file in the repo and add your Confluence credentials there.
 
 ## Running the Analysis
 
@@ -141,7 +153,7 @@ For each space the following CSV files are generated in the SPACEKEY directory:
 * SPACEKEY_unreferenced.csv
 
 Example format:
-Dateiname, Größe(Bytes), Größe(MB), Download URL, Originalseite, Verlinkt auf Seite, Verlinkt auf anderen Seiten, Attachment-Seite Link, API Delete Link
+Filename, Size(Bytes), Size(MB), Download URL, Original Page, Linked on Page, Linked on Other Pages, Attachment Page Link, API Delete Link
 
 The CSV files can be imported into spreadsheet tools or other analysis systems.
 
@@ -165,6 +177,7 @@ GET /wiki/rest/api/space
 GET /wiki/rest/api/content?spaceKey=...
 GET /wiki/rest/api/content/{id}/child/attachment?expand=version
 GET /wiki/rest/api/content/{id}?expand=body.storage
+GET /wiki/rest/api/content/{attachment_id}?expand=version
 
 ### Processing steps
 
@@ -174,7 +187,9 @@ GET /wiki/rest/api/content/{id}?expand=body.storage
 4. Load page storage content
 5. Detect embedded media
 6. Detect links to attachments
-7. Analyze all file versions
+7. Analyze all attachment versions:
+   An attachment is considered used if at least one of its versions is
+   embedded on its owning page or linked from any other page.
 8. Produce HTML + CSV reports
 
 ## License
@@ -186,5 +201,5 @@ See the LICENSE file for details.
 
 The Confluence Cloud Storage Analyzer provides a complete interactive overview of attachment storage usage in Confluence Cloud.
 
-It is designed to be safe transparent and easy to use while providing enough detail to make informed cleanup decisions.
+It is designed to be safe, transparent, and easy to use while providing enough detail to make informed cleanup decisions.
 
