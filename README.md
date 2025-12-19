@@ -1,8 +1,10 @@
 # Confluence Cloud Storage Analyzer
 
-**Version:** V1.1
-**Author:** Frieder Scharpf
+**Version:** V1.1 \
+**Author:** Frieder Scharpf \
 **Description:** A Python tool for analyzing storage used by attachments in Confluence Cloud Free, Standard and Premium.
+
+**DISCLAIMER:** This script was mainly created from ChatGPT. Please use with care! In case of any doubts about security reasons please check source code first or do not use this script.
 
 ## Overview
 
